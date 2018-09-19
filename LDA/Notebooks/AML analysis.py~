@@ -1,0 +1,172 @@
+
+# coding: utf-8
+
+# # BMMC analysis notebook
+
+# In[1]:
+
+
+import pandas as pd
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+import numpy as np
+from sklearn.metrics import f1_score
+import os
+from sklearn.model_selection import KFold
+from sklearn import metrics
+import matplotlib.pyplot as plt
+
+
+# In[2]:
+
+
+aml = pd.read_csv('../Data/AML_benchmark.csv')
+
+
+# Dropping non-gated labeled cells as in paper
+
+# In[3]:
+
+
+aml = aml.loc[aml['cell_type'] != 'NotDebrisSinglets']
+
+aml = aml.drop(axis='columns', labels=["Time", "Cell_length", "DNA1", "DNA2",
+                                       "Viability", "file_number", "event_number", "subject"])
+amllabels = pd.DataFrame(aml['cell_type'])
+
+aml = aml.drop(axis='columns', labels="cell_type")
+aml.shape
+
+
+# arcsinh(5) transform
+
+# In[4]:
+
+
+aml = np.arcsinh((aml-1)/5)
+aml.head(5)
+
+
+# Train LDA & predict labels with CV-cells (5 fold)
+
+# In[5]:
+
+
+amlpredictions = []
+# random state ensures same stratification for training/predicting for eventual evaluation
+# training without shuffling data gives BAD results
+kfoldsplitter = KFold(n_splits=5, shuffle=True, random_state=1)
+for train, test in kfoldsplitter.split(aml):
+    classifier = LinearDiscriminantAnalysis()
+    testdata = aml.iloc[test].values
+    traindata = aml.iloc[train].values
+    trainlabels = amllabels.iloc[train].values.ravel()
+    #train classifier
+    classifier.fit(traindata, trainlabels)
+    #predict labels
+    prediction = classifier.predict(testdata)
+    amlpredictions.append(prediction)
+
+
+# Evaluate AML performance
+
+# In[6]:
+
+
+F1list = []
+Acclist = []
+batch = 0
+for train, test in kfoldsplitter.split(aml):
+    #select true labels
+    true = amllabels.iloc[test].values.ravel()
+    #select predicted labels
+    predicted = amlpredictions[batch]
+    #calculate evaluation metrics
+    F1list.append(metrics.f1_score(true, predicted, average=None, labels=list(set(amllabels.values.ravel()))))
+    Acclist.append(metrics.accuracy_score(true, predicted))
+    batch += 1
+
+
+# ## Evaluation metrics
+# 
+
+# In[7]:
+
+
+amlpredictions = np.hstack(amlpredictions)
+
+unique, counts = np.unique(amlpredictions, return_counts=True)
+amlcountspredicted = dict(zip(unique, counts))
+unique, counts = np.unique(amllabels['cell_type'], return_counts=True)
+amlcountstrue = dict(zip(unique, counts))
+
+
+
+# In[8]:
+
+
+#increase plotsize
+plt.rcParams['figure.figsize'] = [15, 8]
+
+
+# In[9]:
+
+
+F1median = np.median(F1list)
+Accmean = np.mean(Acclist) * 100
+Accstd = np.std(Acclist) * 100
+print('AML CV-cells')
+print('Accuracy mean: %s' % round(Accmean, 2))
+print('Accuracy std: %s' % round(Accstd, 2))
+print('F1 median: %s' % round(F1median, 2))
+
+
+# In[10]:
+
+
+barWidth = 0.25
+# set height of bars
+bars = [[dictionary[key] for key in dictionary] for dictionary in [amlcountstrue, amlcountspredicted]]
+for x in range(len(bars)):
+    total = sum(bars[x])
+    for y in range(len(bars[x])):
+        bars[x][y] = bars[x][y] / total
+#set bar x coords
+r1 = np.arange(len(list(amlcountstrue.keys())))
+r2 = r1 + 0.25
+#plot bars & ticks
+plt.bar(r1, bars[0], color='green', width=barWidth, edgecolor='black', label='true')
+plt.bar(r2, bars[1], color='purple', width=barWidth, edgecolor='black', label='predicted')
+plt.xticks([r + barWidth for r in range(len(bars[0]))], list(amlcountstrue.keys()), rotation='vertical')
+plt.xlabel("Celltypes")
+plt.ylabel("Relative frequency")
+plt.title("AML")
+plt.legend()
+plt.show()
+
+
+# In[11]:
+
+
+#prepare logplot data
+logplotdf = pd.DataFrame(F1list)
+logplotdf.columns = set(amllabels.values.ravel())
+logplotdict = dict(logplotdf.mean())
+for key in amlcountspredicted:
+    logplotdict[key] = [logplotdict[key], np.log10(amlcountspredicted[key])]
+
+
+
+
+# In[12]:
+
+
+#generate logplot
+x = [logplotdict[i][1] for i in logplotdict]
+y = [logplotdict[i][0] for i in logplotdict]
+plt.xlabel('Log10(predicted population size)')
+plt.ylabel('F1-score')
+plt.scatter(x, y, s=80)
+plt.rc('axes', axisbelow=True)
+
+plt.show()
+
